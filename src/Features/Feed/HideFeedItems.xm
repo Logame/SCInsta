@@ -113,23 +113,64 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
     return [filteredObjs copy];
 }
 
+// ---- Feed limit settings (edit here) ----
+static const NSUInteger kSCIFeedPostLimit = 3;        // max number of posts
+static const double kSCIFeedSettleSeconds = 10.0;     // delay so Instagram can load the fresh feed at launch
+
+// ---- In-memory state: resets when the app is closed and relaunched ----
+static NSArray *sciFrozenFeed = nil;
+static CFAbsoluteTime sciFirstFeedCall = 0;
+
+static BOOL sciIsPost(id obj) {
+    return [obj isKindOfClass:%c(IGMedia)] || [obj isKindOfClass:%c(IGFeedItem)];
+}
+
+// Keeps everything up to and including the Nth post (stories tray included) and drops the rest
+// (more feed, loading spinner, end-of-feed). Returns nil while there are fewer than N posts.
+static NSArray *sciLimitedFeed(NSArray *list) {
+    NSMutableArray *limited = [NSMutableArray array];
+    NSUInteger posts = 0;
+
+    for (id obj in list) {
+        [limited addObject:obj];
+
+        if (sciIsPost(obj)) {
+            posts++;
+            if (posts >= kSCIFeedPostLimit) return [limited copy];
+        }
+    }
+
+    return nil;
+}
+
 // Suggested posts/reels
 %hook IGMainFeedListAdapterDataSource
 - (NSArray *)objectsForListAdapter:(id)arg1 {
+    // Limit already reached: always return the same feed (no scroll, no refresh)
+    if (sciFrozenFeed) return sciFrozenFeed;
+
     NSArray *filteredObjs = removeItemsInList(%orig, YES);
 
-    // Remove loading spinner at end of feed (if 5 or less items in feed)
-    NSUInteger arrayLength = [filteredObjs count];
+    if (sciFirstFeedCall == 0) sciFirstFeedCall = CFAbsoluteTimeGetCurrent();
+    BOOL settled = (CFAbsoluteTimeGetCurrent() - sciFirstFeedCall) > kSCIFeedSettleSeconds;
 
-    if (arrayLength <= 5) {
-        filteredObjs = [filteredObjs filteredArrayUsingPredicate:
-            [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *bindings) {
-                return ![obj isKindOfClass:[%c(IGSpinnerLabelViewModel) class]];
-            }]
-        ];
+    NSArray *limited = sciLimitedFeed(filteredObjs);
+
+    if (limited) {
+        NSLog(@"[SCInsta] Feed limited to %lu posts (frozen: %d)", (unsigned long)kSCIFeedPostLimit, settled);
+
+        // Only freeze after the delay, so the cached launch feed isn't kept
+        if (settled) sciFrozenFeed = limited;
+
+        return limited;
     }
 
-    return filteredObjs;
+    // Fewer than N posts for now: remove the end-of-feed spinner like before
+    return [filteredObjs filteredArrayUsingPredicate:
+        [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *bindings) {
+            return ![obj isKindOfClass:[%c(IGSpinnerLabelViewModel) class]];
+        }]
+    ];
 }
 %end
 %hook IGSundialFeedDataSource
