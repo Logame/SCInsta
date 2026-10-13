@@ -28,16 +28,7 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
 
         }
 
-        // Remove suggested reels (carousel)
-        if (isFeed && [SCIUtils getBoolPref:@"no_suggested_reels"]) {
-            if ([obj isKindOfClass:%c(IGFeedScrollableClipsModel)]) {
-                NSLog(@"[SCInsta] Hiding suggested reels carousel");
-
-                continue;
-            }
-        }
-
-// Supprimer toutes les videos / Reels du feed d'accueil
+     // Supprimer toutes les videos / Reels du feed d'accueil
         if (isFeed) {
             // Supprime les carrousels de Reels
             if ([obj isKindOfClass:%c(IGFeedScrollableClipsModel)]) {
@@ -56,16 +47,6 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
                 }
             }
         }
-        
-        // Remove suggested for you (accounts)
-        if ([SCIUtils getBoolPref:@"no_suggested_account"]) {
-            
-            // Feed
-            if (isFeed && [obj isKindOfClass:%c(IGHScrollAYMFModel)]) {
-                NSLog(@"[SCInsta] Hiding accounts suggested for you (feed)");
-
-                continue;
-            }
 
             // Reels
             if ([obj isKindOfClass:%c(IGSuggestedUserInReelsModel)]) {
