@@ -36,6 +36,26 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
                 continue;
             }
         }
+
+// Supprimer toutes les videos / Reels du feed d'accueil
+        if (isFeed) {
+            // Supprime les carrousels de Reels
+            if ([obj isKindOfClass:%c(IGFeedScrollableClipsModel)]) {
+                continue;
+            }
+
+            // Supprime tout post video / Reel individuel dans le feed
+            if ([obj isKindOfClass:%c(IGMedia)]) {
+                IGMedia *media = (IGMedia *)obj;
+                // mediaType: 1 = Photo, 2 = Video/Reel
+                if ([media respondsToSelector:@selector(mediaType)] && [media mediaType] == 2) {
+                    continue;
+                }
+                if ([media respondsToSelector:@selector(isVideo)] && [media isVideo]) {
+                    continue;
+                }
+            }
+        }
         
         // Remove suggested for you (accounts)
         if ([SCIUtils getBoolPref:@"no_suggested_account"]) {
