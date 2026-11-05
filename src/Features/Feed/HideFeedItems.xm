@@ -113,20 +113,71 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
     return [filteredObjs copy];
 }
 
-// ---- Feed limit settings (edit here) ----
-static const NSUInteger kSCIFeedPostLimit = 3;        // max number of posts
-static const double kSCIFeedSettleSeconds = 10.0;     // delay so Instagram can load the fresh feed at launch
+// ---- Feed quota settings (edit here) ----
+// TEST VALUES: after testing, set the limit to 25 and the cooldown to 2.0 * 60 * 60 (2h)
+static const NSUInteger kSCIFeedPostLimit = 5;             // max number of posts per session
+static const double kSCIFeedSettleSeconds = 10.0;          // delay so Instagram can load the fresh feed at launch
+static const double kSCICooldownSeconds = 120.0;           // pause after the limit is reached (seconds)
+static NSString *const kSCILockUntilKey = @"sci_feed_lock_until";
 
-// ---- In-memory state: resets when the app is closed and relaunched ----
-static NSArray *sciFrozenFeed = nil;
+// ---- State ----
+static NSArray *sciFrozenFeed = nil;          // in memory: resets on relaunch
 static CFAbsoluteTime sciFirstFeedCall = 0;
+static BOOL sciAlertShown = NO;
 
 static BOOL sciIsPost(id obj) {
     return [obj isKindOfClass:%c(IGMedia)] || [obj isKindOfClass:%c(IGFeedItem)];
 }
 
-// Keeps everything up to and including the Nth post (stories tray included) and drops the rest
-// (more feed, loading spinner, end-of-feed). Returns nil while there are fewer than N posts.
+// Persistent cooldown (survives closing the app)
+static double sciLockUntil(void) {
+    return [[NSUserDefaults standardUserDefaults] doubleForKey:kSCILockUntilKey];
+}
+
+static BOOL sciIsLocked(void) {
+    return [[NSDate date] timeIntervalSince1970] < sciLockUntil();
+}
+
+static void sciStartCooldown(void) {
+    double until = [[NSDate date] timeIntervalSince1970] + kSCICooldownSeconds;
+    [[NSUserDefaults standardUserDefaults] setDouble:until forKey:kSCILockUntilKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+static void sciShowLockAlert(void) {
+    if (sciAlertShown) return;
+    sciAlertShown = YES;
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                    if (w.isKeyWindow) { window = w; break; }
+                }
+            }
+            if (window) break;
+        }
+
+        UIViewController *vc = window.rootViewController;
+        while (vc.presentedViewController) vc = vc.presentedViewController;
+        if (!vc) return;
+
+        NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+        fmt.dateFormat = @"HH:mm";
+        NSString *hour = [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:sciLockUntil()]];
+
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Terminé pour le moment"
+            message:[NSString stringWithFormat:@"Tu as vu tes %lu posts. Reviens à %@.", (unsigned long)kSCIFeedPostLimit, hour]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+// Keeps everything up to and including the Nth post and drops the rest.
+// Returns nil while there are fewer than N posts.
 static NSArray *sciLimitedFeed(NSArray *list) {
     NSMutableArray *limited = [NSMutableArray array];
     NSUInteger posts = 0;
@@ -146,10 +197,24 @@ static NSArray *sciLimitedFeed(NSArray *list) {
 // Suggested posts/reels
 %hook IGMainFeedListAdapterDataSource
 - (NSArray *)objectsForListAdapter:(id)arg1 {
-    // Limit already reached: always return the same feed (no scroll, no refresh)
+    // Quota reached this session: always return the same feed
     if (sciFrozenFeed) return sciFrozenFeed;
 
     NSArray *filteredObjs = removeItemsInList(%orig, YES);
+
+    // Cooldown still active (even after closing the app): feed without posts
+    if (sciIsLocked()) {
+        NSLog(@"[SCInsta] Feed locked until %f", sciLockUntil());
+        sciShowLockAlert();
+
+        return [filteredObjs filteredArrayUsingPredicate:
+            [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *bindings) {
+                return !sciIsPost(obj)
+                    && ![obj isKindOfClass:[%c(IGSpinnerLabelViewModel) class]]
+                    && ![obj isKindOfClass:[%c(IGEndOfFeedDemarcatorModel) class]];
+            }]
+        ];
+    }
 
     if (sciFirstFeedCall == 0) sciFirstFeedCall = CFAbsoluteTimeGetCurrent();
     BOOL settled = (CFAbsoluteTimeGetCurrent() - sciFirstFeedCall) > kSCIFeedSettleSeconds;
@@ -157,10 +222,13 @@ static NSArray *sciLimitedFeed(NSArray *list) {
     NSArray *limited = sciLimitedFeed(filteredObjs);
 
     if (limited) {
-        NSLog(@"[SCInsta] Feed limited to %lu posts (frozen: %d)", (unsigned long)kSCIFeedPostLimit, settled);
+        NSLog(@"[SCInsta] Feed limited to %lu posts (settled: %d)", (unsigned long)kSCIFeedPostLimit, settled);
 
-        // Only freeze after the delay, so the cached launch feed isn't kept
-        if (settled) sciFrozenFeed = limited;
+        // Freeze and start the cooldown only after the delay, so the cached launch feed isn't counted
+        if (settled) {
+            sciFrozenFeed = limited;
+            sciStartCooldown();
+        }
 
         return limited;
     }
