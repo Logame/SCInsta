@@ -115,9 +115,9 @@ static NSArray *removeItemsInList(NSArray *list, BOOL isFeed) {
 
 // ---- Feed quota settings (edit here) ----
 // TEST VALUES: after testing, set the limit to 25 and the cooldown to 2.0 * 60 * 60 (2h)
-static const NSUInteger kSCIFeedPostLimit = 5;             // max number of posts per session
+static const NSUInteger kSCIFeedPostLimit = 15;             // max number of posts per session
 static const double kSCIFeedSettleSeconds = 10.0;          // delay so Instagram can load the fresh feed at launch
-static const double kSCICooldownSeconds = 120.0;           // pause after the limit is reached (seconds)
+static const double kSCICooldownSeconds = 900.0;           // pause after the limit is reached (seconds)
 static NSString *const kSCILockUntilKey = @"sci_feed_lock_until";
 
 // ---- State ----
